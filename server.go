@@ -46,5 +46,5 @@ func main() {
 		c.JSON(http.StatusOK, APIresponse{Success: true, Data: data})
 	})
 
-	r.Run(":8080")
+	r.RunTLS(":8080", "server.crt", "server.key")
 }
