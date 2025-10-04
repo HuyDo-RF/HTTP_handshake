@@ -81,7 +81,7 @@ func doScenario(client *http.Client, clientID string, measurement string) {
 		return
 	}
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		method := randomMethod()
 		sendRequest(client, method, req, realID)
 		if method == "DELETE" {
@@ -90,17 +90,17 @@ func doScenario(client *http.Client, clientID string, measurement string) {
 	}
 }
 
-func shortConnection() {
+func shortConnection(clientIndex int) {
 	transport := &http.Transport{
 		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
 		DisableKeepAlives: true,
 		DialContext:       (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
 	client := &http.Client{Transport: transport}
-	doScenario(client, "client_short", "real-time")
+	doScenario(client, fmt.Sprintf("client_short_%d", clientIndex), "real-time")
 }
 
-func pooledConnection() {
+func pooledConnection(clientIndex int) {
 	transport := &http.Transport{
 		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 		MaxIdleConns:        10,
@@ -111,15 +111,18 @@ func pooledConnection() {
 	}
 	client := &http.Client{Transport: transport}
 
-	for i := 0; i < 3; i++ {
-		id := fmt.Sprintf("client_pool_%d", i)
-		doScenario(client, id, "stress-test")
-	}
+	doScenario(client, fmt.Sprintf("client_pool_%d", clientIndex), "stress-test")
 }
 
 func main() {
-	fmt.Println("Short connection test")
-	shortConnection()
-	fmt.Println("\nPooled connection test")
-	pooledConnection()
+	if err := CreateCSVHeader("qos_training_data.csv"); err != nil {
+		fmt.Printf("Error creating CSV header: %v\n", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		shortConnection(i)
+		pooledConnection(i)
+		fmt.Printf("Round %d completed\n", i+1)
+		time.Sleep(2000 * time.Millisecond)
+	}
 }
