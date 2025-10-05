@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -30,27 +29,30 @@ func sendRequest(client *http.Client, method string, req QoSCreateRequest, id st
 
 	var body []byte
 	var err error
-	if method == "POST" || method == "PUT" || method == "PATCH" {
+	switch method {
+	case "POST", "PUT":
 		body, err = json.Marshal(req)
 		if err != nil {
 			fmt.Println("Marshal error:", err)
 			return ""
 		}
+	case "PATCH":
+		body = []byte(`{}`)
 	}
 
-	var reqBody io.Reader
-	if method == "POST" || method == "PUT" || method == "PATCH" {
-		reqBody = bytes.NewBuffer(body)
+	var reqObj *http.Request
+	if len(body) > 0 {
+		reqObj, err = http.NewRequest(method, reqURL, bytes.NewBuffer(body))
+	} else {
+		reqObj, err = http.NewRequest(method, reqURL, nil)
 	}
-
-	request, err := http.NewRequest(method, reqURL, reqBody)
 	if err != nil {
 		fmt.Println("Request error:", err)
 		return ""
 	}
-	request.Header.Set("Content-Type", "application/json")
+	reqObj.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(request)
+	resp, err := client.Do(reqObj)
 	if err != nil {
 		fmt.Printf("[%s] Error: %v\n", method, err)
 		return ""
@@ -59,12 +61,15 @@ func sendRequest(client *http.Client, method string, req QoSCreateRequest, id st
 	result, _ := ioutil.ReadAll(resp.Body)
 	fmt.Printf("[%s] %s => %s\n", method, reqURL, string(result))
 
+	// Nếu là POST, lấy id dau
 	if method == "POST" {
 		var apiResp map[string]interface{}
 		if err := json.Unmarshal(result, &apiResp); err == nil {
-			if dataMap, ok := apiResp["data"].(map[string]interface{}); ok {
-				if realID, ok := dataMap["id"].(string); ok {
-					return realID
+			if arr, ok := apiResp["data"].([]interface{}); ok && len(arr) > 0 {
+				if first, ok := arr[0].(map[string]interface{}); ok {
+					if realID, ok := first["id"].(string); ok {
+						return realID
+					}
 				}
 			}
 		}
@@ -73,7 +78,7 @@ func sendRequest(client *http.Client, method string, req QoSCreateRequest, id st
 }
 
 func doScenario(client *http.Client, clientID string, measurement string) {
-	req := QoSCreateRequest{ClientID: clientID, MeasurementType: measurement, Duration: 10}
+	req := QoSCreateRequest{ClientID: clientID, MeasurementType: measurement, Duration: 50}
 	realID := sendRequest(client, "POST", req, clientID)
 
 	if realID == "" {
@@ -84,6 +89,7 @@ func doScenario(client *http.Client, clientID string, measurement string) {
 	for i := 0; i < 5; i++ {
 		method := randomMethod()
 		sendRequest(client, method, req, realID)
+
 		if method == "DELETE" {
 			realID = sendRequest(client, "POST", req, clientID)
 		}
@@ -110,7 +116,6 @@ func pooledConnection(clientIndex int) {
 		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 	}
 	client := &http.Client{Transport: transport}
-
 	doScenario(client, fmt.Sprintf("client_pool_%d", clientIndex), "stress-test")
 }
 
@@ -119,10 +124,10 @@ func main() {
 		fmt.Printf("Error creating CSV header: %v\n", err)
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 36; i++ {
 		shortConnection(i)
 		pooledConnection(i)
 		fmt.Printf("Round %d completed\n", i+1)
-		time.Sleep(2000 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 	}
 }
