@@ -3,32 +3,38 @@ package main
 import (
 	"encoding/csv"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
 	"time"
 )
 
-type database struct { //QoS theo chuan github
-	ID                string  `json:"id"`                //ma dinh danh cho cac lan do
-	DlPacketDelay     uint32  `json:"dlPacketDelay"`     //tre1
-	UlPacketDelay     uint32  `json:"ulPacketDelay"`     //tre2
-	RtrPacketDelay    uint32  `json:"rtrPacketDelay"`    //tre3
-	MeasureFailure    bool    `json:"measureFailure"`    //co fail hay ko
-	DlAveThroughput   float64 `json:"dlAveThroughput"`   //toc do tb kem don vi
-	UlAveThroughput   float64 `json:"ulAveThroughput"`   //toc do tb kem don vi
-	DlCongestion      int     `json:"dlCongestion"`      //do tac nghen
-	UlCongestion      int     `json:"ulCongestion"`      //do tac nghen
-	DefaultQosFlowInd bool    `json:"defaultQosFlowInd"` //QoS flow co mac  dinh ko, mac dinh la false
-
-	//MetaData
-	Timestamp       string `json:"timestamp"`       //Thoi gian bat dau test
-	ServerID        string `json:"serverID"`        //ID server
-	ClientID        string `json:"clientID"`        //ID client
-	MeasurementType string `json:"measurementType"` //Loai do (real-time, stress - test,...)
+// ==================== STRUCT =====================
+type database struct {
+	ID                string  `json:"id"`
+	DlPacketDelay     float64 `json:"dlPacketDelay"`
+	UlPacketDelay     float64 `json:"ulPacketDelay"`
+	RtrPacketDelay    float64 `json:"rtrPacketDelay"`
+	MeasureFailure    bool    `json:"measureFailure"`
+	DlAveThroughput   float64 `json:"dlAveThroughput"`
+	UlAveThroughput   float64 `json:"ulAveThroughput"`
+	DlCongestion      float64 `json:"dlCongestion"`
+	UlCongestion      float64 `json:"ulCongestion"`
+	DefaultQosFlowInd bool    `json:"defaultQosFlowInd"`
+	Timestamp         string  `json:"timestamp"`
+	ServerID          string  `json:"serverID"`
+	ClientID          string  `json:"clientID"`
+	MeasurementType   string  `json:"measurementType"`
+	IsAnomaly         int     `json:"isAnomaly"`
 }
 
-// APIresponse chuan Restful
+type QoSCreateRequest struct {
+	ClientID        string `json:"clientId"`
+	MeasurementType string `json:"measurementType"`
+	Duration        int    `json:"duration"` // số điểm trong chuỗi
+}
+
 type APIresponse struct {
 	Success bool        `json:"success"`
 	Message string      `json:"message"`
@@ -36,79 +42,110 @@ type APIresponse struct {
 	Error   string      `json:"error"`
 }
 
-// QoSCreateRequest cho POST endpoint
-type QoSCreateRequest struct {
-	ClientID        string `json:"clientId"`
-	MeasurementType string `json:"measurementType"`
-	Duration        int    `json:"duration"` // seconds
+func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start time.Time) []*database {
+	records := make([]*database, 0, n)
+
+	// trạng thái drift (random walk)
+	var driftDl, driftUl, driftDelay float64
+
+	for i := 0; i < n; i++ {
+		t := float64(i)
+		isAnomaly := 0
+
+		// ==== Throughput: sin + drift + noise ====
+		driftDl += rand.NormFloat64() * 0.5
+		driftUl += rand.NormFloat64() * 0.2
+
+		dlTput := 200 + 80*math.Sin(2*math.Pi*t/100) + driftDl + rand.NormFloat64()*5
+		ulTput := 200 + 30*math.Sin(2*math.Pi*t/90) + driftUl + rand.NormFloat64()*3
+		if dlTput < 5 {
+			dlTput = 5
+		}
+		if ulTput < 1 {
+			ulTput = 1
+		}
+
+		// ==== Delay: sin riêng + ngược throughput + drift ====
+		driftDelay += rand.NormFloat64() * 0.3
+		baseDlDelay := 20 + 5*math.Sin(2*math.Pi*t/110)
+		dlDelay := baseDlDelay + (250-dlTput)/50 + driftDelay + rand.NormFloat64()*2
+		if dlDelay < 5 {
+			dlDelay = 5
+		}
+
+		baseUlDelay := 15 + 5*math.Sin(2*math.Pi*t/95)
+		ulDelay := baseUlDelay + (100-ulTput)/20 + driftDelay + rand.NormFloat64()*2
+		if ulDelay < 5 {
+			ulDelay = 5
+		}
+
+		rtt := dlDelay + ulDelay + 5 + rand.NormFloat64()*2
+
+		// ==== Congestion: sin độc lập + noise Gaussian ====
+		baseDlCong := 6.5 + 3.0*math.Sin(2*math.Pi*t/120)                // dao động chậm
+		noiseDl := 0.5 * math.Sin(2*math.Pi*t/15+rand.Float64()*math.Pi) // nhiễu nhanh
+		dlCong := baseDlCong + noiseDl + rand.NormFloat64()*0.3          // thêm chút noise Gaussian
+		if dlCong < 3 {
+			dlCong = 3 + rand.Float64()*0.5 // tránh vượt dưới 3%
+		} else if dlCong > 10 {
+			dlCong = 10 - rand.Float64()*0.5
+		}
+
+		baseUlCong := 6.0 + 3.0*math.Sin(2*math.Pi*t/130+math.Pi/4)
+		noiseUl := 0.5 * math.Sin(2*math.Pi*t/20+rand.Float64()*math.Pi/3)
+		ulCong := baseUlCong + noiseUl + rand.NormFloat64()*0.3
+		if ulCong < 3 {
+			ulCong = 3 + rand.Float64()*0.5
+		} else if ulCong > 10 {
+			ulCong = 10 - rand.Float64()*0.5
+		}
+
+		// ==== Anomaly thỉnh thoảng ====
+		if rand.Float64() < 0.01 {
+			isAnomaly = 1
+
+			switch rand.Intn(4) {
+			case 0: // congestion spike
+				dlCong += 20
+				ulCong += 20
+			case 1: // delay spike
+				dlDelay *= 1.5
+				ulDelay *= 1.5
+			case 2: // throughput drop
+				dlTput *= 0.2
+				ulTput *= 0.2
+			case 3: // combination
+				dlTput *= 0.3
+				dlDelay *= 1.5
+				dlCong += 20
+			}
+		}
+
+		// ==== Tạo record ====
+		d := &database{
+			ID:                fmt.Sprintf("qos_%d_%s", time.Now().UnixNano(), clientID),
+			DlPacketDelay:     dlDelay,
+			UlPacketDelay:     ulDelay,
+			RtrPacketDelay:    rtt,
+			MeasureFailure:    rand.Float32() < 0.05,
+			DlAveThroughput:   dlTput,
+			UlAveThroughput:   ulTput,
+			DlCongestion:      dlCong,
+			UlCongestion:      ulCong,
+			DefaultQosFlowInd: rand.Float32() < 0.5,
+			Timestamp:         start.Add(time.Duration(i) * time.Minute).Format("2006-01-02T15:04:05Z"),
+			ClientID:          clientID,
+			ServerID:          "qos-server-api-v1",
+			MeasurementType:   measurementType,
+			IsAnomaly:         isAnomaly,
+		}
+		records = append(records, d)
+	}
+	return records
 }
 
-// Tạo oQoS Data
-func GenerateQoSData(clientID, measurementType string) *database {
-	id := fmt.Sprintf("qos_%d_%s", time.Now().UnixNano(), clientID)
-
-	// Set range tuỳ theo loại measurement
-	var baseDlDelay, baseUlDelay, baseRtt uint32
-	var dlTputMin, dlTputMax, ulTputMin, ulTputMax float64
-	var failRate float32
-
-	switch measurementType {
-	case "real-time": // giả lập URLLC
-		baseDlDelay = uint32(5 + rand.Intn(5))  // 5–10 ms
-		baseUlDelay = uint32(6 + rand.Intn(5))  // 6–11 ms
-		baseRtt = baseDlDelay + baseUlDelay + 2 // ~15–25 ms
-		dlTputMin, dlTputMax = 50, 200          // Mbps
-		ulTputMin, ulTputMax = 10, 100          // Mbps
-		failRate = 0.02
-	case "stress-test": // giả lập eMBB tải nặng
-		baseDlDelay = uint32(20 + rand.Intn(40)) // 20–60 ms
-		baseUlDelay = uint32(25 + rand.Intn(40)) // 25–65 ms
-		baseRtt = baseDlDelay + baseUlDelay + 10 // ~60–120 ms
-		dlTputMin, dlTputMax = 20, 800           // Mbps
-		ulTputMin, ulTputMax = 5, 200            // Mbps
-		failRate = 0.08
-	default: // mặc định eMBB bình thường
-		baseDlDelay = uint32(15 + rand.Intn(20)) // 15–35 ms
-		baseUlDelay = uint32(18 + rand.Intn(20)) // 18–38 ms
-		baseRtt = baseDlDelay + baseUlDelay + 5  // ~40–70 ms
-		dlTputMin, dlTputMax = 100, 1000         // Mbps
-		ulTputMin, ulTputMax = 20, 150           // Mbps
-		failRate = 0.05
-	}
-
-	// Congestion ảnh hưởng throughput & delay
-	congestion := rand.Intn(100)                   // 0–99
-	delayFactor := 1.0 + float64(congestion)/200.0 // delay tăng theo congestion
-	tputFactor := 1.0 - float64(congestion)/300.0  // throughput giảm theo congestion
-
-	dlDelay := uint32(float64(baseDlDelay) * delayFactor)
-	ulDelay := uint32(float64(baseUlDelay) * delayFactor)
-	rtt := uint32(float64(baseRtt) * delayFactor)
-
-	dlTput := dlTputMin + rand.Float64()*(dlTputMax-dlTputMin)
-	ulTput := ulTputMin + rand.Float64()*(ulTputMax-ulTputMin)
-	dlTput *= tputFactor
-	ulTput *= tputFactor
-
-	return &database{
-		ID:                id,
-		DlPacketDelay:     dlDelay,
-		UlPacketDelay:     ulDelay,
-		RtrPacketDelay:    rtt,
-		MeasureFailure:    rand.Float32() < failRate,
-		DlAveThroughput:   dlTput,
-		UlAveThroughput:   ulTput,
-		DlCongestion:      congestion,
-		UlCongestion:      congestion + rand.Intn(10) - 5, // dao động nhẹ
-		DefaultQosFlowInd: rand.Float32() < 0.5,           // ~50% có QFI mặc định
-		Timestamp:         time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-		ClientID:          clientID,
-		ServerID:          "qos-server-api-v1",
-		MeasurementType:   measurementType,
-	}
-}
-
-func SaveQoSDataToCSV(data *database, filename string) error {
+// ==================== CSV =====================
+func SaveQoSSeriesToCSV(data []*database, filename string) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -118,23 +155,28 @@ func SaveQoSDataToCSV(data *database, filename string) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	record := []string{
-		data.ID,
-		strconv.Itoa(int(data.DlPacketDelay)),
-		strconv.Itoa(int(data.UlPacketDelay)),
-		strconv.Itoa(int(data.RtrPacketDelay)),
-		strconv.FormatBool(data.MeasureFailure),
-		strconv.FormatFloat(data.DlAveThroughput, 'f', 2, 64),
-		strconv.FormatFloat(data.UlAveThroughput, 'f', 2, 64),
-		strconv.Itoa(data.DlCongestion),
-		strconv.Itoa(data.UlCongestion),
-		strconv.FormatBool(data.DefaultQosFlowInd),
-		data.MeasurementType,
-		data.ClientID,
-		data.Timestamp,
+	for _, r := range data {
+		record := []string{
+			r.ID,
+			strconv.FormatFloat(r.DlPacketDelay, 'f', 2, 64),
+			strconv.FormatFloat(r.UlPacketDelay, 'f', 2, 64),
+			strconv.FormatFloat(r.RtrPacketDelay, 'f', 2, 64),
+			strconv.FormatBool(r.MeasureFailure),
+			strconv.FormatFloat(r.DlAveThroughput, 'f', 2, 64),
+			strconv.FormatFloat(r.UlAveThroughput, 'f', 2, 64),
+			strconv.FormatFloat(r.DlCongestion, 'f', 2, 64),
+			strconv.FormatFloat(r.UlCongestion, 'f', 2, 64),
+			strconv.FormatBool(r.DefaultQosFlowInd),
+			r.MeasurementType,
+			r.ClientID,
+			r.Timestamp,
+			strconv.Itoa(r.IsAnomaly),
+		}
+		if err := writer.Write(record); err != nil {
+			return err
+		}
 	}
-
-	return writer.Write(record)
+	return nil
 }
 
 func CreateCSVHeader(filename string) error {
@@ -151,8 +193,7 @@ func CreateCSVHeader(filename string) error {
 		"ID", "DlPacketDelay", "UlPacketDelay", "RtrPacketDelay",
 		"MeasureFailure", "DlAveThroughput", "UlAveThroughput",
 		"DlCongestion", "UlCongestion", "DefaultQosFlowInd",
-		"MeasurementType", "ClientID", "Timestamp",
+		"MeasurementType", "ClientID", "Timestamp", "IsAnomaly",
 	}
-
 	return writer.Write(headers)
 }
