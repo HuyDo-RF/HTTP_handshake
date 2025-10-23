@@ -13,16 +13,16 @@ import (
 // ==================== STRUCT =====================
 type database struct {
 	ID                string  `json:"id"`
-	DlPacketDelay     float64 `json:"dlPacketDelay"`
-	UlPacketDelay     float64 `json:"ulPacketDelay"`
-	RtrPacketDelay    float64 `json:"rtrPacketDelay"`
-	MeasureFailure    bool    `json:"measureFailure"`
-	DlAveThroughput   float64 `json:"dlAveThroughput"`
-	UlAveThroughput   float64 `json:"ulAveThroughput"`
-	DlCongestion      float64 `json:"dlCongestion"`
-	UlCongestion      float64 `json:"ulCongestion"`
+	DlPacketDelay     float64 `json:"DlPacketDelay"`
+	UlPacketDelay     float64 `json:"UlPacketDelay"`
+	RtrPacketDelay    float64 `json:"RtrPacketDelay"`
+	MeasureFailure    bool    `json:"MeasureFailure"`
+	DlAveThroughput   float64 `json:"DlAveThroughput"`
+	UlAveThroughput   float64 `json:"UlAveThroughput"`
+	DlCongestion      float64 `json:"DlCongestion"`
+	UlCongestion      float64 `json:"UlCongestion"`
 	DefaultQosFlowInd bool    `json:"defaultQosFlowInd"`
-	Timestamp         string  `json:"timestamp"`
+	Timestamp         string  `json:"Timestamp"`
 	ServerID          string  `json:"serverID"`
 	ClientID          string  `json:"clientID"`
 	MeasurementType   string  `json:"measurementType"`
@@ -45,14 +45,14 @@ type APIresponse struct {
 func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start time.Time) []*database {
 	records := make([]*database, 0, n)
 
-	// trạng thái drift (random walk)
+	// drift
 	var driftDl, driftUl, driftDelay float64
 
 	for i := 0; i < n; i++ {
 		t := float64(i)
 		isAnomaly := 0
 
-		// ==== Throughput: sin + drift + noise ====
+		// Throughput: sin + drift + noise
 		driftDl += rand.NormFloat64() * 0.5
 		driftUl += rand.NormFloat64() * 0.2
 
@@ -65,7 +65,7 @@ func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start t
 			ulTput = 1
 		}
 
-		// ==== Delay: sin riêng + ngược throughput + drift ====
+		//Delay: sin riêng + ngược throughput + drift
 		driftDelay += rand.NormFloat64() * 0.3
 		baseDlDelay := 20 + 5*math.Sin(2*math.Pi*t/110)
 		dlDelay := baseDlDelay + (250-dlTput)/50 + driftDelay + rand.NormFloat64()*2
@@ -81,7 +81,7 @@ func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start t
 
 		rtt := dlDelay + ulDelay + 5 + rand.NormFloat64()*2
 
-		// ==== Congestion: sin độc lập + noise Gaussian ====
+		// Congestion: sin độc lập + noise Gaussian
 		baseDlCong := 6.5 + 3.0*math.Sin(2*math.Pi*t/120)                // dao động chậm
 		noiseDl := 0.5 * math.Sin(2*math.Pi*t/15+rand.Float64()*math.Pi) // nhiễu nhanh
 		dlCong := baseDlCong + noiseDl + rand.NormFloat64()*0.3          // thêm chút noise Gaussian
@@ -100,7 +100,7 @@ func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start t
 			ulCong = 10 - rand.Float64()*0.5
 		}
 
-		// ==== Anomaly thỉnh thoảng ====
+		// Anomaly
 		if rand.Float64() < 0.01 {
 			isAnomaly = 1
 
@@ -121,7 +121,7 @@ func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start t
 			}
 		}
 
-		// ==== Tạo record ====
+		//Tạo record
 		d := &database{
 			ID:                fmt.Sprintf("qos_%d_%s", time.Now().UnixNano(), clientID),
 			DlPacketDelay:     dlDelay,
@@ -144,7 +144,7 @@ func GenerateQoSSeriesFromStart(clientID, measurementType string, n int, start t
 	return records
 }
 
-// ==================== CSV =====================
+// CSV
 func SaveQoSSeriesToCSV(data []*database, filename string) error {
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
