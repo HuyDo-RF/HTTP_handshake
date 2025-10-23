@@ -124,7 +124,7 @@ func main() {
 		fmt.Printf("Error creating CSV header: %v\n", err)
 	}
 
-	for i := 0; i < 36; i++ {
+	for i := 0; i < 10; i++ {
 		shortConnection(i)
 		pooledConnection(i)
 		fmt.Printf("Round %d completed\n", i+1)
