@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -18,7 +21,7 @@ var (
 func main() {
 	r := gin.Default()
 
-	// --- POST: tạo chuỗi Time Series ---
+	//POST: Tich hop AI
 	r.POST("/qos", func(c *gin.Context) {
 		var req QoSCreateRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -49,12 +52,58 @@ func main() {
 		}
 		lock.Unlock()
 
+		//Gọi Python
+		cmd := exec.Command("D:\\5G VDT\\HTTP_VHT\\QoS_HTTP2\\.venv\\Scripts\\python.exe", "predict_qos.py")
+		inputJSON, _ := json.Marshal(series)
+
+		cmd.Stdin = bytes.NewReader(inputJSON)
+		cmd.Stderr = nil
+		out, err := cmd.Output()
+
+		fmt.Println("=== Python Output ===")
+		fmt.Println(string(out))
+		fmt.Println("=====================")
+
+		if err != nil {
+			fmt.Printf("Predict model error: %v\n", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":         err.Error(),
+				"python_output": string(out),
+			})
+			return
+		}
+
+		//Parse output JSON từ Python
+		var result map[string]interface{}
+		if err := json.Unmarshal(out, &result); err != nil {
+			fmt.Printf("JSON parse error from Python output: %v\n", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Cannot parse Python output",
+				"raw":   string(out),
+			})
+			return
+		}
+
+		/*if err != nil {
+			fmt.Printf("Predict model error: %v\n", err)
+		} else {
+			var pred map[string]interface{}
+			if json.Unmarshal(out, &pred) == nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success":    true,
+					"message":    "QoS series generated & evaluated",
+					"alerts":     pred["alerts"],
+					"prediction": pred["prediction"],
+				})
+				return
+			}
+		} */
+
 		c.JSON(http.StatusOK, APIresponse{
 			Success: true, Message: "QoS series generated", Data: series,
 		})
 	})
 
-	// --- GET: lấy record theo ID ---
 	r.GET("/qos/:id", func(c *gin.Context) {
 		id := c.Param("id")
 
@@ -69,7 +118,6 @@ func main() {
 		c.JSON(http.StatusOK, APIresponse{Success: true, Data: data})
 	})
 
-	// --- PUT: thay thế record ---
 	r.PUT("/qos/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var req QoSCreateRequest
@@ -98,12 +146,11 @@ func main() {
 		c.JSON(http.StatusOK, APIresponse{Success: true, Message: "QoS data updated", Data: data})
 	})
 
-	// --- PATCH: cập nhật nhẹ (giữ nguyên data cũ) ---
 	r.PATCH("/qos/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var updates map[string]interface{}
 		if c.Request.Body != nil {
-			_ = c.ShouldBindJSON(&updates) // không ép buộc
+			_ = c.ShouldBindJSON(&updates)
 		}
 
 		lock.Lock()
@@ -118,7 +165,6 @@ func main() {
 		c.JSON(http.StatusOK, APIresponse{Success: true, Message: "QoS data patched", Data: data})
 	})
 
-	// --- DELETE: xoá record ---
 	r.DELETE("/qos/:id", func(c *gin.Context) {
 		id := c.Param("id")
 
@@ -134,7 +180,5 @@ func main() {
 
 		c.JSON(http.StatusOK, APIresponse{Success: true, Message: "QoS data deleted"})
 	})
-
-	// chạy HTTPS server
 	r.RunTLS(":8080", "server.crt", "server.key")
 }
